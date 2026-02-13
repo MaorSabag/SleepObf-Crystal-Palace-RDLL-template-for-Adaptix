@@ -4,6 +4,7 @@
 # Executable Files
 *.exe
 *.dll
+*.bin
 
 # Log Files
 *.log
@@ -12,3 +13,6 @@
 *.tmp
 *.temp
 
+# Build artifacts
+build/
+output/

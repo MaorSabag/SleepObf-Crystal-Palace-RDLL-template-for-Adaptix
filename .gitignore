@@ -1,0 +1,14 @@
+# Compiled Object Files
+*.o
+
+# Executable Files
+*.exe
+*.dll
+
+# Log Files
+*.log
+
+# Temporary Files
+*.tmp
+*.temp
+

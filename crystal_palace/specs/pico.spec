@@ -12,5 +12,8 @@ x64:
   exportfunc "set_image_info" "__tag_set_image_info"  # export image info setter for Ekko obfuscation
 
   addhook "KERNEL32$Sleep" "_Sleep"  # hook Sleep to demonstrate the hooking capabilities of the loader
+  addhook "KERNEL32$ConnectNamedPipe" "_ConnectNamedPipe"  # hook ConnectNamedPipe to demonstrate the hooking capabilities of the loader
+  addhook "KERNEL32$FlushFileBuffers" "_FlushFileBuffers"  # hook FlushFileBuffers to demonstrate the hooking capabilities of the loader
+  addhook "KERNEL32$WaitForSingleObjectEx" "_WaitForSingleObjectEx"  # hook WaitForSingleObjectEx to demonstrate the hooking capabilities of the loader
 
   export

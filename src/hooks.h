@@ -400,3 +400,37 @@ typedef enum _SYSTEM_INFORMATION_CLASS
     SystemProcessorFeaturesBitMapInformation,
     MaxSystemInfoClass
 } SYSTEM_INFORMATION_CLASS;
+
+typedef BOOL(WINAPI *fnConnectNamedPipe)(HANDLE, LPOVERLAPPED);
+typedef BOOL(WINAPI *fnFlushFileBuffers)(HANDLE);
+typedef DWORD(WINAPI *fnWaitForSingleObjectEx)(HANDLE, DWORD, BOOL);
+
+typedef enum _HOOK_FUNCTION {
+    SLEEP,
+    CONNECT_NAMED_PIPE,
+    FLUSH_FILE_BUFFERS,
+    WAIT_FOR_SINGLE_OBJECT_EX
+    
+} HOOK_TYPE;
+
+typedef struct _SLEEP_ARGS {
+    DWORD dwMilliseconds;
+} SLEEP_ARGS;
+
+typedef struct _CONNECT_NAMED_PIPE_ARGS {
+    HANDLE hNamedPipe;
+    LPOVERLAPPED lpOverlapped;
+    fnConnectNamedPipe OriginalFunc;
+} CONNECT_NAMED_PIPE_ARGS;
+
+typedef struct _FLUSH_FILE_BUFFERS_ARGS {
+    HANDLE hFile;
+    fnFlushFileBuffers OriginalFunc;
+} FLUSH_FILE_BUFFERS_ARGS;
+
+typedef struct _WAIT_FOR_SINGLE_OBJECT_EX_ARGS {
+    HANDLE hObject;
+    DWORD dwMilliseconds;
+    BOOL bAlertable;
+    fnWaitForSingleObjectEx OriginalFunc;
+} WAIT_FOR_SINGLE_OBJECT_EX_ARGS;

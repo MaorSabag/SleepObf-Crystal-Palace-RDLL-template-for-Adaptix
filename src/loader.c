@@ -210,9 +210,6 @@ void go(void)
     DLLMAIN_FUNC entry_point = EntryPoint(&dll_data, dll_dst);
     entry_point((HINSTANCE)dll_dst, DLL_PROCESS_ATTACH, NULL);
 
-    MSVCRT$printf ( "[loader] entry point returned, checking permissions again...\n" );
-    /* re-apply section permissions in case the DLL's DllMain undid them */
-    fix_section_permissions(&dll_data, dll_dst);
     KERNEL32$FlushInstructionCache((HANDLE)-1, dll_dst, SizeOfDLL(&dll_data));
 
     typedef void (WINAPI * _GetVersions)();

@@ -16,3 +16,6 @@
 # Build artifacts
 build/
 output/
+
+# Shellcode.h file
+loader/include/Shellcode.h

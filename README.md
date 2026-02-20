@@ -101,6 +101,12 @@ struct SMBFUNC {
 ```
 
 ```diff
+-   this->hChannel = this->functions->CreateNamedPipeA((CHAR*) profile.pipename, PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE, PIPE_UNLIMITED_INSTANCES, 0x100000, 0x100000, 0, &sa);
++   this->hChannel = this->functions->CreateNamedPipeA((CHAR*) profile.pipename, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE, PIPE_UNLIMITED_INSTANCES, 0x100000, 0x100000, 0, &sa);
+
+```
+
+```diff
 +BOOL ConnectorSMB::PerformOverlappedIO(BOOL isRead, LPVOID buffer, DWORD length, LPDWORD transferred) {
 +    OVERLAPPED ov = { 0 };
 +    ov.hEvent = this->functions->CreateEventA(NULL, TRUE, FALSE, NULL);

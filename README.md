@@ -246,7 +246,7 @@ do {
         }
         else {
 -            g_Connector->SendData(NULL, 0);            
-+            g_Connector->SendData(NULL, 0, TRUE);
++            g_Connector->SendData(NULL, 0, FALSE);
         }
 
         if (g_Connector->RecvSize() == 0 && this->functions->GetLastError() == ERROR_BROKEN_PIPE) {

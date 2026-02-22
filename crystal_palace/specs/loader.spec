@@ -1,6 +1,6 @@
 x64:
 	load "../../build/loader.x64.o"        # read the loader COFF
-		make pic +gofirst          # turn it into PIC and ensure the go function is at the start
+		make pic +gofirst +optimize +mutate +disco     		# turn it into PIC and ensure the go function is at the start
 
 	run "../../crystal_palace/specs/services.spec"  # run the services spec to merge the services PIC and resolve functions
 

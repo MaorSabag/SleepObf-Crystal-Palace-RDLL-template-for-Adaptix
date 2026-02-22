@@ -1,5 +1,7 @@
 #pragma once
 #include <windows.h>
+#include "tcg.h"
+
 /**
  * The SYSTEM_PROCESS_INFORMATION structure contains information about a process running on a system.
  */
@@ -410,7 +412,6 @@ typedef enum _HOOK_FUNCTION {
     CONNECT_NAMED_PIPE,
     FLUSH_FILE_BUFFERS,
     WAIT_FOR_SINGLE_OBJECT_EX
-    
 } HOOK_TYPE;
 
 typedef struct _SLEEP_ARGS {
@@ -434,3 +435,65 @@ typedef struct _WAIT_FOR_SINGLE_OBJECT_EX_ARGS {
     BOOL bAlertable;
     fnWaitForSingleObjectEx OriginalFunc;
 } WAIT_FOR_SINGLE_OBJECT_EX_ARGS;
+
+
+#ifndef NTSTATUS
+typedef LONG NTSTATUS;
+#endif
+
+#define NtCurrentProcess()  ((HANDLE)(LONG_PTR)-1)
+#define NtCurrentThread()    ( (HANDLE) (LONG_PTR)-2 )
+#define STATUS_INFO_LENGTH_MISMATCH ((NTSTATUS)0xC0000004L)
+#define U_PTR( x )  ((ULONG_PTR)(x))
+
+/* ── Win32 imports (Crystal Palace MODULE$Function convention) ── */
+DECLSPEC_IMPORT DWORD   KERNEL32$WaitForSingleObject(HANDLE, DWORD);
+DECLSPEC_IMPORT DWORD   KERNEL32$WaitForSingleObjectEx(HANDLE, DWORD, BOOL);
+DECLSPEC_IMPORT HANDLE  KERNEL32$CreateEventW(LPSECURITY_ATTRIBUTES, BOOL, BOOL, LPCWSTR);
+DECLSPEC_IMPORT HANDLE  KERNEL32$CreateTimerQueue(VOID);
+DECLSPEC_IMPORT BOOL    KERNEL32$CreateTimerQueueTimer(PHANDLE, HANDLE, WAITORTIMERCALLBACK, PVOID, DWORD, DWORD, ULONG);
+DECLSPEC_IMPORT BOOL    KERNEL32$DeleteTimerQueue(HANDLE);
+DECLSPEC_IMPORT LPVOID  KERNEL32$VirtualAlloc(LPVOID, SIZE_T, DWORD, DWORD);
+DECLSPEC_IMPORT BOOL    KERNEL32$VirtualFree(LPVOID, SIZE_T, DWORD);
+DECLSPEC_IMPORT BOOL    KERNEL32$VirtualProtect(LPVOID, SIZE_T, DWORD, PDWORD);
+DECLSPEC_IMPORT BOOL    KERNEL32$SetEvent(HANDLE);
+DECLSPEC_IMPORT HMODULE KERNEL32$GetModuleHandleA(LPCSTR);
+DECLSPEC_IMPORT HMODULE KERNEL32$LoadLibraryA(LPCSTR);
+DECLSPEC_IMPORT FARPROC KERNEL32$GetProcAddress(HMODULE, LPCSTR);
+DECLSPEC_IMPORT BOOL    KERNEL32$FlushInstructionCache(HANDLE, LPCVOID, SIZE_T);
+DECLSPEC_IMPORT DWORD   KERNEL32$GetCurrentProcessId(VOID);
+DECLSPEC_IMPORT DWORD   KERNEL32$GetCurrentThreadId(VOID);
+DECLSPEC_IMPORT DWORD   KERNEL32$DuplicateHandle(HANDLE, HANDLE, HANDLE, LPHANDLE, DWORD, BOOL, DWORD);
+DECLSPEC_IMPORT HANDLE  KERNEL32$OpenThread(DWORD, BOOL, DWORD);
+DECLSPEC_IMPORT BOOL    KERNEL32$GetThreadContext(HANDLE, LPCONTEXT);
+DECLSPEC_IMPORT BOOL    KERNEL32$SetThreadContext(HANDLE, const CONTEXT *);
+DECLSPEC_IMPORT BOOL    KERNEL32$CloseHandle(HANDLE);
+DECLSPEC_IMPORT VOID    KERNEL32$SetLastError(DWORD);
+
+DECLSPEC_IMPORT int __cdecl MSVCRT$printf(const char *, ...);
+DECLSPEC_IMPORT void * __cdecl MSVCRT$memcpy(void *, const void *, size_t);
+DECLSPEC_IMPORT void * __cdecl MSVCRT$memset(void *, int, size_t);
+
+DECLSPEC_IMPORT NTSTATUS NTAPI NTDLL$NtQuerySystemInformation(
+    SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    PVOID SystemInformation,
+    ULONG SystemInformationLength,
+    PULONG ReturnLength
+);
+// MessageBoxA is used in the hooks to demonstrate that the hooks are working, and to show the output of the GetVersions callback
+// DECLSPEC_IMPORT int WINAPI USER32$MessageBoxA ( HWND, LPCSTR, LPCSTR, UINT );
+
+/* ── USTRING for SystemFunction032 (RC4-based XOR encrypt/decrypt) ── */
+typedef struct {
+    DWORD  Length;
+    DWORD  MaximumLength;
+    PVOID  Buffer;
+} USTRING;
+
+typedef NTSTATUS (WINAPI *fnSystemFunction032)(USTRING *, USTRING *);
+typedef VOID     (WINAPI *fnRtlCaptureContext)(PCONTEXT);
+typedef NTSTATUS (NTAPI  *fnNtContinue)(PCONTEXT, BOOLEAN);
+
+/* ── Globals set by setup_hooks — stores the loaded DLL image info ── */
+PVOID  g_ImageBase = NULL;
+DWORD  g_ImageSize = 0;

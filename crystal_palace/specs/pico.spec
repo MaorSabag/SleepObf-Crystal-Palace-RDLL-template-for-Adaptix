@@ -1,7 +1,7 @@
 x64:
 
   load "../../build/pico.x64.o"         # read the pico COFF
-    make object
+    make object +optimize +disco +mutate
 
   load "../../build/hooks.x64.o"         # read the hooks COFF
     merge

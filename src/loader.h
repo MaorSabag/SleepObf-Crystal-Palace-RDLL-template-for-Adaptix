@@ -1,3 +1,66 @@
+#include <windows.h>
+#include "tcg.h"
+
+#define NtCurrentProcess()  ((HANDLE)(LONG_PTR)-1)
+
+DECLSPEC_IMPORT LPVOID WINAPI KERNEL32$VirtualAlloc ( LPVOID, SIZE_T, DWORD, DWORD );
+DECLSPEC_IMPORT BOOL WINAPI KERNEL32$VirtualProtect ( LPVOID, SIZE_T, DWORD, PDWORD );
+DECLSPEC_IMPORT BOOL WINAPI KERNEL32$VirtualFree ( LPVOID, SIZE_T, DWORD );
+DECLSPEC_IMPORT BOOL WINAPI KERNEL32$FlushInstructionCache(HANDLE, LPCVOID, SIZE_T);
+// MessageBoxA is used in the hooks to demonstrate that the hooks are working, and to show the output of the GetVersions callback
+DECLSPEC_IMPORT int WINAPI USER32$MessageBoxA ( HWND, LPCSTR, LPCSTR, UINT );
+DECLSPEC_IMPORT HANDLE  KERNEL32$CreateThread(LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
+DECLSPEC_IMPORT BOOL    KERNEL32$CloseHandle(HANDLE);
+DECLSPEC_IMPORT HANDLE  KERNEL32$CreateTimerQueue(VOID);
+DECLSPEC_IMPORT BOOL    KERNEL32$CreateTimerQueueTimer(PHANDLE, HANDLE, WAITORTIMERCALLBACK, PVOID, DWORD, DWORD, ULONG);
+DECLSPEC_IMPORT BOOL    KERNEL32$DeleteTimerQueue(HANDLE);
+DECLSPEC_IMPORT HANDLE  KERNEL32$CreateEventA(LPSECURITY_ATTRIBUTES, BOOL, BOOL, LPCSTR);
+DECLSPEC_IMPORT BOOL    KERNEL32$SetEvent(HANDLE);
+// GetLastError from kernel32.dll for error handling
+DECLSPEC_IMPORT DWORD WINAPI KERNEL32$GetLastError ( void );
+DECLSPEC_IMPORT DWORD WINAPI KERNEL32$WaitForSingleObject(HANDLE, DWORD);
+DECLSPEC_IMPORT HMODULE WINAPI KERNEL32$LoadLibraryExA(LPCSTR, HANDLE, DWORD);
+
+// Printf from msvcrt.dll
+DECLSPEC_IMPORT int __cdecl MSVCRT$printf ( const char *, ... );
+DECLSPEC_IMPORT void * __cdecl MSVCRT$memset ( void *, int, size_t );
+
+
+char _DLL_ [0] __attribute__ ( ( section ( "dll" ) ) );
+
+char _PICO_ [ 0 ] __attribute__ ( ( section ( "pico" ) ) );
+
+char _MASK_  [0] __attribute__ ( ( section ( "mask"  ) ) );
+
+typedef struct {
+    char data [ 4096 ];
+    char code [ 16384 ];
+} PICO;
+
+typedef struct {
+    int  len;
+    char value[];
+} RESOURCE;
+
+typedef struct {
+	char * picData;
+	DWORD  picSize;
+} PIC_CLEANUP_CTX;
+typedef struct {
+    void (*fn)(void);
+    HANDLE evt;
+} TIMER_CTX;
+
+typedef void (WINAPI* _GetVersions)();
+
+int __tag_setup_hooks ( );
+int __tag_set_image_info ( );
+
+typedef void ( * SETUP_HOOKS ) ( IMPORTFUNCS * funcs );
+typedef void ( * SET_IMAGE_INFO ) ( PVOID base, DWORD size );
+
+#define GETRESOURCE(x) ( char * ) &x
+
 void* GetExport(char* base, const char* name) {
     PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)base;
     PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)(base + dos->e_lfanew);

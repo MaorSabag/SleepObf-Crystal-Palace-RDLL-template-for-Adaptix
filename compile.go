@@ -200,7 +200,7 @@ func compileFinal(root, format, baseName string, debug bool) {
 		sourcePath = filepath.Join(root, loaderDir, "source", "main", "Exe.cc")
 		outputPath = filepath.Join(root, outputDir, baseName+".exe")
 	case "dll":
-		sourcePath = filepath.Join(root, loaderDir, "source", "main", "Dll.c")
+		sourcePath = filepath.Join(root, loaderDir, "source", "main", "Dll.cc")
 		outputPath = filepath.Join(root, outputDir, baseName+".dll")
 		extraFlags = append(extraFlags, "-shared")
 	case "svc":

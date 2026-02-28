@@ -329,15 +329,19 @@ At runtime, `loader.c` reads both sections as `RESOURCE` structs (length-prefixe
 | `-mno-stack-arg-probe` | Avoids `___chkstk_ms` relocation (EkkoObf uses ~8.5 KB of stack) |
 | `-fno-zero-initialized-in-bss` | Forces zero-init globals into `.data` instead of `.bss` (PIC can't resolve `.bss` relocations) |
 
+## Demo
+
+https://github.com/user-attachments/assets/240e1b2d-c8f1-4e70-865d-872f04e192a9
 
 ## Credits
 
 - Original Crystal Palace RDLL template by [Raphael Mudge](https://www.cobaltstrike.com)
 - [Ekko](https://github.com/Cracked5pider/Ekko) sleep obfuscation by C5pider
-- [Adaptix C2](https://github.com/Jekoie/Adaptix)
+- [Adaptix C2](https://github.com/Adaptix-Framework/AdaptixC2)
 - [Kharon Agent](https://github.com/entropy-z/Kharon) for loader inspiration
 - [h41th](https://github.com/h41th/Simple-Crystal-Palace-RDLL-template-for-Adaptix) for the original Crystal Palace loader template for Adaptix
 
 ## Disclaimer
+
 
 This project is for educational and authorized red team use only. Obtain proper authorization before deploying.

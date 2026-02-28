@@ -1,0 +1,21 @@
+# Compiled Object Files
+*.o
+
+# Executable Files
+*.exe
+*.dll
+*.bin
+
+# Log Files
+*.log
+
+# Temporary Files
+*.tmp
+*.temp
+
+# Build artifacts
+build/
+output/
+
+# Shellcode.h file
+loader/include/Shellcode.h

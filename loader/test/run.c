@@ -10,6 +10,26 @@
 #include <stdio.h>
 #include <winsock.h>
 
+/* context passed to the timer queue callback */
+typedef struct {
+	char * picData;
+	DWORD  picSize;
+} PIC_CLEANUP_CTX;
+
+/* timer callback: runs go(), then wipes and frees the RWX PIC allocation */
+VOID CALLBACK RunAndCleanupPIC(PVOID lpParam, BOOLEAN TimerOrWaitFired) {
+	PIC_CLEANUP_CTX * ctx = (PIC_CLEANUP_CTX *)lpParam;
+
+	/* execute the PIC loader (go function) */
+	( (void (*)())ctx->picData )();
+
+	/* go() returned — PIC code is no longer executing, clean up the RWX allocation */
+	SecureZeroMemory(ctx->picData, ctx->picSize);
+	VirtualFree(ctx->picData, 0, MEM_RELEASE);
+	ctx->picData = NULL;
+	printf("[cleanup] PIC loader memory wiped and freed.\n");
+}
+
 DWORD GetVolSerialNo() {
 	DWORD volumeSerialNumber = 0;
 	GetVolumeInformationA("c:\\", NULL, 0, &volumeSerialNumber, NULL, NULL, NULL, 0);
@@ -111,8 +131,18 @@ int main(int argc, char * argv[]) {
 	/* wait! */
 	getchar();
 
-	/* ready? */
-	( (void (*)())data )();
+	/* schedule go() + cleanup via a timer queue (fires immediately, one-shot) */
+	PIC_CLEANUP_CTX ctx = { data, fileSz };
+	HANDLE hTimerQueue = CreateTimerQueue();
+	HANDLE hTimer      = NULL;
+
+	if (!CreateTimerQueueTimer(&hTimer, hTimerQueue, RunAndCleanupPIC, &ctx, 0, 0, WT_EXECUTEONLYONCE)) {
+		printf("CreateTimerQueueTimer failed: %ld\n", GetLastError());
+		goto end;
+	}
+
+	/* keep process alive — DLL background threads continue running */
+	Sleep(INFINITE);
 
 end:
 	CloseHandle(hFile);

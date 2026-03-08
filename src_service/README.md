@@ -54,6 +54,8 @@ This module contains the core logic for compiling and wrapping agents.
 -	}
 -	ts.EventManager.EmitAsync(eventing.EventAgentGenerate, postEvent)
 -	// -----------------
+
+-_ = ts.TsAgentBuildSendFile(builder.Id, fileName, fileContent)
 ```
 
 ```diff
@@ -76,6 +78,14 @@ This module contains the core logic for compiling and wrapping agents.
 +		goto RET
 +	}
 +    // -----------------
++_ = ts.TsAgentBuildSendFile(builder.Id, postEvent.FileName, postEvent.FileContent)
+```
+
+### Building the teamserver with the new code changes:
+```bash
+cd AdaptixServer
+GOEXPERIMENT=jsonv2,greenteagc go build -buildvcs=false -ldflags="-s -w" -o adaptixserver
+cp adaptixserver /path/to/your/teamserver/
 ```
 ---
 

@@ -343,5 +343,4 @@ https://github.com/user-attachments/assets/240e1b2d-c8f1-4e70-865d-872f04e192a9
 
 ## Disclaimer
 
-
 This project is for educational and authorized red team use only. Obtain proper authorization before deploying.

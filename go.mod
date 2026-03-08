@@ -1,4 +1,4 @@
-module stealthpalace
+module Adaptix-StealthPalace
 
 go 1.25.4
 

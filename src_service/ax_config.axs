@@ -1,13 +1,9 @@
-// ============================================================
-//  StealthPalace Service Extender — ax_config.axs
-// ============================================================
 
 var metadata = {
     name: "StealthPalace",
     description: "StealthPalace RDLL loader - directory browser & agent compiler"
 };
 
-// Global variables
 var g_output_widget = null;
 var g_settings = {};
 
@@ -64,9 +60,19 @@ function data_handler(data) {
     }
 }
 
+function settingsValidate(settings) {
+    if (!settings.format ||
+        ["exe", "dll", "bin", "svc"].indexOf(settings.format.toLowerCase()) === -1 ||
+        settings.out.trim() === "" || 
+        settings.pic.trim() === ""
+    ) {
+        return false;
+    }
+    return true;
+}
+
 function buildCompileWindow() {
     ax.log("Opening Compile Agent window...");
-
     
     // Group 1: Input
     let fileSelectorDll = form.create_selector_file();
@@ -136,7 +142,6 @@ function buildCompileWindow() {
     panel_output.setLayout(grid_output);
     grp_output.setPanel(panel_output);
 
-
     if (g_settings.format) {
         let idx = formatItems.findIndex(i => i.toLowerCase() === g_settings.format.toLowerCase());
         if (idx !== -1) comboFormat.setCurrentIndex(idx);
@@ -168,6 +173,22 @@ function buildCompileWindow() {
     });
 
     form.connect(btn_save, "clicked", function () {
+        
+        if (txt_out.text().trim() === "") {
+            ax.show_message("Validation Error", "Output Name cannot be empty.");
+            return;
+        }
+        if (grp_stomp.isChecked()) {
+            if (textlineHostDll.text().trim() === "") {
+                ax.show_message("Validation Error", "Host DLL path is required when Stomp is enabled.");
+                return;
+            }
+            if (textlineStompDll.text().trim() === "") {
+                ax.show_message("Validation Error", "Stomp DLL path is required when Stomp is enabled.");
+                return;
+            }
+        }
+        // Update the global variable immediately so it stays in sync
         g_settings = {
             format: comboFormat.currentText(),
             out: txt_out.text(),
@@ -178,18 +199,33 @@ function buildCompileWindow() {
             host_dll: textlineHostDll.text(),
             stomp_dll: textlineStompDll.text()
         };
+        // Send to service for persistent storage
         ax.service_command("stealthpalace", "save_settings", g_settings);
         ax.log("Settings cached and saved to service.");
     });
 
     form.connect(btn_compile, "clicked", function () {
         txt_output.setText("");
+
         let container = form.create_container();
         container.put("dll_content", fileSelectorDll);
-
-        if (!container.get("dll_content")) {
-            txt_output.setText("Please specify the agent DLL.");
+        if (!container.get("dll_content") || fileSelectorDll.text().trim() === "") {
+            ax.show_message("Validation Error", "Agent DLL path is required.");
             return;
+        }
+        if (txt_out.text().trim() === "") {
+            ax.show_message("Validation Error", "Output Name cannot be empty.");
+            return;
+        }
+        if (grp_stomp.isChecked()) {
+            if (textlineHostDll.text().trim() === "") {
+                ax.show_message("Validation Error", "Host DLL path is required when Stomp is enabled.");
+                return;
+            }
+            if (textlineStompDll.text().trim() === "") {
+                ax.show_message("Validation Error", "Stomp DLL path is required when Stomp is enabled.");
+                return;
+            }
         }
 
         ax.service_command("stealthpalace", "run_compile", {
@@ -217,7 +253,7 @@ function buildCompileWindow() {
     let dialog = form.create_dialog("StealthPalace — Compile Agent");
     dialog.setSize(620, 760);
     dialog.setLayout(main_layout);
-    dialog.exec(); 
+    dialog.exec(); // Blocking call
 
-    g_output_widget = null;
+    g_output_widget = null; // Cleanup
 }

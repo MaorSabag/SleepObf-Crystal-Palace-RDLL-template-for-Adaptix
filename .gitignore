@@ -17,5 +17,5 @@
 build/
 output/
 
-# Shellcode.h file
 loader/include/Shellcode.h
+src_service/dist/*

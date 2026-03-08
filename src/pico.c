@@ -4,6 +4,7 @@
 /* globals defined in hooks.c — shared via merge in the same PICO */
 extern PVOID  g_ImageBase;
 extern DWORD  g_ImageSize;
+extern VOID   ResolveHookFunctions(VOID);
 
 /*
  * Hooked GetProcAddress — Crystal Palace's attach rewrites the GetProcAddress
@@ -44,4 +45,5 @@ void set_image_info ( PVOID base, DWORD size )
     g_ImageBase = base;
     g_ImageSize = size;
     StealthDbg("set_image_info: base=%p size=0x%lx\n", base, size);
+    ResolveHookFunctions();
 }

@@ -36,7 +36,7 @@ namespace Shellcode {
 
 var (
 	// Absolute path to the root of the project (Adaptix-StealthPalace)
-	root, _   = filepath.Abs("/opt/post-exploitation/AdaptixC2/AdaptixServer/extenders/Adaptix-StealthPalace")
+	root, _   = filepath.Abs("/opt/post-exploitation/Adaptix-StealthPalace")
 
 	buildDir   = filepath.Join(root, "build")
 	srcDir     = filepath.Join(root, "src")
